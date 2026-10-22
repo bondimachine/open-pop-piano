@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Light-Up Piano</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e2e0da;
+  --accent: #2f6fdf; --ok: #1f9d55;
+  --played: #2f6fdf; --lit: #f2a900; --key-w: #fff; --key-b: #222;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141416; --panel: #1e1e21; --ink: #ececef; --muted: #9a9aa2; --line: #2e2e33;
+    --accent: #5b8ff0; --key-w: #e9e9ec; --key-b: #0b0b0c;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141416; --panel: #1e1e21; --ink: #ececef; --muted: #9a9aa2; --line: #2e2e33;
+  --accent: #5b8ff0; --key-w: #e9e9ec; --key-b: #0b0b0c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, system-ui, sans-serif; }
+main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 40px; display: grid; gap: 14px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+.tagline { color: var(--muted); margin: 2px 0 0; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.row + .row { margin-top: 10px; }
+.spacer { flex: 1; }
+label { color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+button, .filebtn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 6px 12px; cursor: pointer; }
+button:hover:not(:disabled), .filebtn:hover { border-color: var(--accent); }
+button.primary, .filebtn { background: var(--accent); color: #fff; border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+select, input[type=number] { font: inherit; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; }
+input[type=number] { width: 64px; }
+input[type=range] { accent-color: var(--accent); }
+.status { font-size: 13px; color: var(--muted); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+.dot.on { background: var(--ok); }
+.parts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.part { border: 1px solid var(--line); border-radius: 99px; padding: 3px 10px 3px 6px; font-size: 12px; color: var(--ink); }
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.tab { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 12px; color: var(--muted); }
+.tab.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.pane[hidden] { display: none; }
+#pos { flex: 1; min-width: 160px; }
+.mono { font-variant-numeric: tabular-nums; }
+.learn-msg { font-size: 18px; font-weight: 600; margin: 4px 0 2px; min-height: 27px; }
+.learn-sub { color: var(--muted); font-size: 13px; min-height: 19px; }
+.kbd-wrap { overflow-x: auto; padding-bottom: 6px; }
+.kbd { position: relative; height: 150px; user-select: none; }
+.k { position: absolute; top: 0; border: 1px solid #888; border-radius: 0 0 5px 5px; cursor: pointer; }
+.k.w { background: var(--key-w); height: 150px; z-index: 1; }
+.k.b { background: var(--key-b); height: 92px; z-index: 2; }
+.k.lit { box-shadow: inset 0 -18px 0 var(--lit); }
+.k.played { background: var(--played) !important; }
+.k .lbl { position: absolute; bottom: 22px; width: 100%; text-align: center; font-size: 9px; color: #777; pointer-events: none; }
+.hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+.about { font-size: 13px; }
+.about p, .about ul { margin: 0 0 10px; }
+.about ul { padding-left: 20px; }
+.about li { margin-bottom: 4px; }
+.about code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.about details { margin-top: 6px; }
+.about summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+.about .fine { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Light-Up Piano</h1>
+    <p class="tagline">A browser replacement for the POP Piano app: play MIDI files on your lighted-key piano and learn songs one segment at a time.</p>
+  </div>
+
+  <section>
+    <div class="row">
+      <button class="primary" id="connect">Connect piano</button>
+      <button id="disconnect" disabled>Disconnect</button>
+      <span class="status" id="status"><span class="dot"></span>not connected</span>
+      <span class="spacer"></span>
+      <label>Keys <select id="size"><option value="21-108" selected>88</option><option value="36-96">61</option><option value="36-84">49</option></select></label>
+      <button id="allOff" disabled>All lights off</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Song</h2>
+    <div class="row">
+      <label class="filebtn">Open .mid…<input type="file" id="file" accept=".mid,.midi,audio/midi" hidden></label>
+      <span class="status" id="songInfo">no file loaded</span>
+    </div>
+    <div class="parts" id="parts"></div>
+    <div class="row">
+      <label>Speed <input type="range" id="speed" min="0.25" max="1.5" step="0.05" value="1"> <span class="mono" id="speedLbl">100%</span></label>
+      <label>Volume <input type="range" id="vol" min="0" max="1" step="0.05" value="0.7"></label>
+      <label><input type="checkbox" id="pcSound"> sound on this computer</label>
+      <label><input type="checkbox" id="pianoSound" checked> sound on the piano</label>
+    </div>
+  </section>
+
+  <section>
+    <div class="tabs">
+      <button class="tab active" data-pane="playPane">Play</button>
+      <button class="tab" data-pane="learnPane">Learn</button>
+    </div>
+    <div class="pane" id="playPane">
+      <div class="row">
+        <button class="primary" id="play" disabled>▶ Play</button>
+        <button id="stop" disabled>⏹</button>
+        <input type="range" id="pos" min="0" max="1" step="0.01" value="0" disabled>
+        <span class="mono status" id="posLbl">0:00 / 0:00</span>
+      </div>
+    </div>
+    <div class="pane" id="learnPane" hidden>
+      <div class="row">
+        <label>Segments of about <input type="number" id="segSecs" min="1" max="60" value="5"> s (always whole bars)</label>
+        <label><input type="checkbox" id="listenFirst" checked> listen to each segment before playing it</label>
+      </div>
+      <div class="row">
+        <button class="primary" id="learnStart" disabled>Start</button>
+        <button id="learnStop" disabled>Stop</button>
+        <button id="segPrev" disabled>◀ Previous segment</button>
+        <button id="segAgain" disabled>Repeat segment</button>
+        <button id="segNext" disabled>Next segment ▶</button>
+        <label>Start from segment <select id="segFrom" disabled></select></label>
+      </div>
+      <div class="learn-msg" id="learnMsg"></div>
+      <div class="learn-sub" id="learnSub"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="kbd-wrap"><div class="kbd" id="kbd"></div></div>
+    <p class="hint">Click a key to turn its light on or off (in Learn mode a click counts as playing it). <span style="color:var(--lit)">■</span> lit · <span style="color:var(--played)">■</span> you're pressing it.</p>
+  </section>
+
+  <section class="about">
+    <h2>About</h2>
+    <p>This page replaces the <b>POP Piano</b> app for pianos with light-up keys. It runs entirely in your browser and talks to the piano over Bluetooth.</p>
+    <ul>
+      <li><b>Tested with a Vangoa 88-key lighted piano.</b> It should also work with other light-up keyboards built on the same Bluetooth module, the ones that work with POP Piano.</li>
+      <li><b>Look for a Bluetooth device named <code>GZUT-MIDI</code></b> when you connect. The connect dialog only lists devices whose name starts with "GZUT" or that offer Bluetooth MIDI.</li>
+      <li><b>Use desktop Chrome or Edge.</b> The page needs Web Bluetooth, which Safari and Firefox don't support.</li>
+      <li><b>The piano accepts one connection at a time.</b> Close POP Piano on your phone and don't pair the piano in your computer's MIDI settings (Audio MIDI Setup on a Mac) before connecting here.</li>
+      <li><b>Regular MIDI apps can't drive the lights.</b> The piano's firmware only accepts Bluetooth MIDI packets with a fixed timestamp, and the operating system's MIDI stack (including Web MIDI) always sends real timestamps. That's why this page talks to Bluetooth directly.</li>
+    </ul>
+    <details>
+      <summary>Protocol notes (for developers)</summary>
+      <ul>
+        <li>Standard BLE MIDI: service <code>03b80e5a-ede8-4b33-a751-6ce34ec4c700</code>, characteristic <code>7772e5db-3868-4112-a1a9-f2669d106bf3</code>. Write without response; subscribe to notifications to receive the keys you press.</li>
+        <li>Every packet must use the timestamp bytes <code>80 80</code>.</li>
+        <li>Light a key: <code>80 80 F0 4D 4C 4E 45 &lt;note&gt; 02 80 F7</code> (the bytes <code>4D 4C 4E 45</code> are "MLNE" in ASCII). Send <code>00</code> instead of <code>02</code> to turn it off.</li>
+        <li>All lights off: <code>80 80 F0 50 00 00 00 00 00 80 F7</code></li>
+        <li>Play a sound: <code>80 80 90 &lt;note&gt; &lt;velocity&gt;</code> (and <code>80 80 80 &lt;note&gt; 00</code> to release). Several notes can go in one packet, each preceded by <code>80</code>. Notes sent this way don't light their keys.</li>
+        <li>No initialization or handshake is needed.</li>
+      </ul>
+    </details>
+    <p class="fine">Not affiliated with Vangoa or POP Piano. The protocol was worked out by capturing the Bluetooth traffic between the POP Piano app and the piano.</p>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
+const fmtTime = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Standard BLE MIDI; the firmware only accepts the fixed timestamp 80 80
+const MIDI_SVC = '03b80e5a-ede8-4b33-a751-6ce34ec4c700';
+const MIDI_CHR = '7772e5db-3868-4112-a1a9-f2669d106bf3';
+const LIGHT_COLOR = 0x02;
+const lightCmd = (note, color) => [0x80, 0x80, 0xF0, 0x4D, 0x4C, 0x4E, 0x45, note, color, 0x80, 0xF7];
+const ALL_OFF = [0x80, 0x80, 0xF0, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xF7];
+
+// ---------- Keyboard ----------
+const kbd = $('kbd');
+const keyEls = new Map();
+let range = [21, 108];
+const isBlack = n => [1, 3, 6, 8, 10].includes(n % 12);
+// Notes outside the keyboard are shifted by octaves so they land on it
+function fold(n) {
+  while (n < range[0]) n += 12;
+  while (n > range[1]) n -= 12;
+  return n;
+}
+function buildKeyboard() {
+  range = $('size').value.split('-').map(Number);
+  kbd.innerHTML = ''; keyEls.clear();
+  // Keys shrink so the whole keyboard fits the available width
+  let whites = 0;
+  for (let n = range[0]; n <= range[1]; n++) if (!isBlack(n)) whites++;
+  const W = Math.max(14, Math.min(28, Math.floor(kbd.parentElement.clientWidth / whites)));
+  const B = Math.round(W * 0.62);
+  let x = 0;
+  for (let n = range[0]; n <= range[1]; n++) {
+    const el = document.createElement('div');
+    if (isBlack(n)) {
+      el.className = 'k b';
+      el.style.left = (x - B / 2) + 'px'; el.style.width = B + 'px';
+    } else {
+      el.className = 'k w';
+      el.style.left = x + 'px'; el.style.width = W + 'px';
+      if (n % 12 === 0) el.innerHTML = `<span class="lbl">${noteName(n)}</span>`;
+      x += W;
+    }
+    el.classList.toggle('lit', !!desired.get(n));
+    el.onclick = () => onKeyClick(n);
+    kbd.appendChild(el); keyEls.set(n, el);
+  }
+  kbd.style.width = x + 'px';
+}
+$('size').onchange = buildKeyboard;
+let resizeTimer;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(buildKeyboard, 150); });
+const markKey = (n, cls, on) => keyEls.get(n)?.classList.toggle(cls, on);
+
+function onKeyClick(n) {
+  if (learn.phase === 'play') { onUserNote(n); return; }
+  setLight(n, !desired.get(n));
+}
+
+// ---------- Lights: BLE write queue ----------
+// Web Bluetooth doesn't allow two writes at once, and if the song moves faster than
+// Bluetooth it's better to send only the latest state of each key. So we keep the
+// desired state and a pump sends the changes one at a time.
+// Notes (when the piano makes the sound) go before lights, because a delay in the sound
+// is much more noticeable, and notes that start together travel in one BLE MIDI packet.
+const desired = new Map();  // note → lit (what we want)
+const sent = new Map();     // note → lit (what the piano already received)
+const dirty = new Set();
+const notesOut = [];        // 3-byte MIDI messages for the piano to play
+let allOffPending = false, pumping = false, pumpQueued = false;
+const MAX_PACKET = 180;     // the official app negotiated MTU 185
+
+function setLight(n, on) {
+  desired.set(n, on);
+  markKey(n, 'lit', on);
+  dirty.add(n);
+  pump();
+}
+function allLightsOff() {
+  desired.clear(); dirty.clear(); lightCount.clear();
+  keyEls.forEach(el => el.classList.remove('lit'));
+  allOffPending = true;
+  pump();
+}
+function sendNote(msg) { notesOut.push(msg); pump(); }
+
+// Wait for the end of the current task so everything that happened at the same instant
+// (a whole chord) is already queued when the first packet goes out.
+function pump() {
+  if (pumpQueued) return;
+  pumpQueued = true;
+  queueMicrotask(() => { pumpQueued = false; drain(); });
+}
+async function drain() {
+  if (pumping || !midiChar) return;
+  pumping = true;
+  try {
+    while (midiChar) {
+      if (allOffPending) {
+        allOffPending = false;
+        await write(ALL_OFF);
+        sent.clear();
+      } else if (notesOut.length) {
+        // header + (timestamp 80 + message) per note
+        const packet = [0x80];
+        while (notesOut.length && packet.length + 4 <= MAX_PACKET) packet.push(0x80, ...notesOut.shift());
+        await write(packet);
+      } else if (dirty.size) {
+        const n = dirty.values().next().value;
+        dirty.delete(n);
+        const on = !!desired.get(n);
+        if (!!sent.get(n) === on) continue;
+        if (await write(lightCmd(n, on ? LIGHT_COLOR : 0x00))) sent.set(n, on);
+      } else break;
+    }
+  } finally { pumping = false; }
+}
+
+// Per-key count: if two song notes use the same key, it turns off when both have ended
+const lightCount = new Map();
+const pianoPlays = () => $('pianoSound').checked && !!midiChar;
+function songLightOn(n) {
+  const c = lightCount.get(n) || 0;
+  lightCount.set(n, c + 1);
+  if (c === 0) setLight(n, true);
+}
+function songLightOff(n) {
+  const c = lightCount.get(n) || 0;
+  if (c <= 1) { lightCount.delete(n); setLight(n, false); }
+  else lightCount.set(n, c - 1);
+}
+
+$('allOff').onclick = allLightsOff;
+
+// ---------- Bluetooth ----------
+let device = null, midiChar = null;
+
+function setStatus(text, on) {
+  $('status').innerHTML = `<span class="dot ${on ? 'on' : ''}"></span>${text}`;
+  $('connect').disabled = on; $('disconnect').disabled = !on; $('allOff').disabled = !on;
+}
+
+$('connect').onclick = async () => {
+  if (!navigator.bluetooth) { setStatus('this browser has no Web Bluetooth (use Chrome or Edge)', false); return; }
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'GZUT' }, { services: [MIDI_SVC] }],
+      optionalServices: [MIDI_SVC],
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    setStatus('connecting…', false);
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(MIDI_SVC);
+    midiChar = await svc.getCharacteristic(MIDI_CHR);
+    midiChar.addEventListener('characteristicvaluechanged', e => onPacket(new Uint8Array(e.target.value.buffer)));
+    await midiChar.startNotifications();
+    setStatus(`connected to ${device.name || 'piano'}`, true);
+    // The piano starts with all lights off: send whatever the page has lit
+    sent.clear();
+    allOffPending = true;
+    desired.forEach((on, n) => on && dirty.add(n));
+    pump();
+  } catch (e) {
+    midiChar = null;
+    setStatus(e.name === 'NotFoundError' ? 'not connected' : 'error: ' + e.message, false);
+  }
+};
+$('disconnect').onclick = () => device?.gatt?.disconnect();
+
+function onDisconnected() {
+  midiChar = null;
+  sent.clear();
+  keyEls.forEach(el => el.classList.remove('played'));
+  setStatus('disconnected', false);
+}
+
+async function write(bytes) {
+  try {
+    const data = new Uint8Array(bytes);
+    if (midiChar.properties.writeWithoutResponse) await midiChar.writeValueWithoutResponse(data);
+    else await midiChar.writeValue(data);
+    return true;
+  } catch (e) {
+    if (midiChar) setStatus('send error: ' + e.message, true);
+    return false;
+  }
+}
+
+// ---------- Input (BLE MIDI) ----------
+// Each packet = header + [timestamp + message]...; only Note On/Off matter here.
+function dataLen(s) {
+  if (s < 0xC0) return 2; if (s < 0xE0) return 1; if (s < 0xF0) return 2;
+  if (s === 0xF1 || s === 0xF3) return 1; if (s === 0xF2) return 2; return 0;
+}
+function onPacket(p) {
+  let i = 1, running = null;
+  while (i < p.length) {
+    let b = p[i], status;
+    if (b & 0x80) {
+      i++; if (i >= p.length) break;
+      b = p[i];
+      if (b & 0x80) { status = b; i++; } else status = running;
+    } else status = running;
+    if (status == null) { i++; continue; }
+    if (status === 0xF0) { while (i < p.length && p[i] !== 0xF7) i++; i++; continue; } // skip SysEx
+    const n = dataLen(status);
+    const [note, vel] = [p[i], p[i + 1]];
+    i += n;
+    if (status < 0xF0) running = status;
+    const type = status & 0xF0;
+    if (type === 0x90 && vel > 0) { markKey(note, 'played', true); onUserNote(note); }
+    else if (type === 0x80 || type === 0x90) markKey(note, 'played', false);
+  }
+}
+
+// ---------- MIDI file reader ----------
+function parseMidi(buf) {
+  const d = new DataView(buf);
+  const str = (o, n) => String.fromCharCode(...new Uint8Array(buf, o, n));
+  if (buf.byteLength < 14 || str(0, 4) !== 'MThd') throw new Error('not a MIDI file');
+  const ntracks = d.getUint16(10), ppq = d.getUint16(12);
+  if (ppq & 0x8000) throw new Error('SMPTE timing is not supported');
+  let p = 8 + d.getUint32(4);
+  const notes = [], tempos = [], timeSigs = [], trackNames = [];
+  let lastTick = 0;
+  for (let t = 0; t < ntracks && p + 8 <= buf.byteLength; t++) {
+    const id = str(p, 4), len = d.getUint32(p + 4);
+    p += 8;
+    const end = Math.min(p + len, buf.byteLength);
+    if (id !== 'MTrk') { p = end; continue; }
+    const vlq = () => { let v = 0, b; do { b = d.getUint8(p++); v = (v << 7) | (b & 0x7F); } while (b & 0x80); return v; };
+    const open = new Map(); // channel*128+note → [{tick, vel}]
+    let tick = 0, running = 0;
+    while (p < end) {
+      tick += vlq();
+      let st = d.getUint8(p);
+      if (st & 0x80) { p++; if (st < 0xF0) running = st; } else st = running;
+      if (st === 0xFF) {
+        const type = d.getUint8(p++), l = vlq(), at = p;
+        p += l;
+        if (type === 0x03 && !trackNames[t]) trackNames[t] = new TextDecoder().decode(new Uint8Array(buf, at, l)).trim();
+        if (type === 0x51) tempos.push({ tick, uspq: (d.getUint8(at) << 16) | (d.getUint8(at + 1) << 8) | d.getUint8(at + 2) });
+        if (type === 0x58) timeSigs.push({ tick, num: d.getUint8(at), den: 2 ** d.getUint8(at + 1) });
+        if (type === 0x2F) break;
+      } else if (st === 0xF0 || st === 0xF7) {
+        p += vlq();
+      } else {
+        const type = st & 0xF0, ch = st & 0x0F;
+        const a = d.getUint8(p++);
+        const b = (type === 0xC0 || type === 0xD0) ? 0 : d.getUint8(p++);
+        const key = ch * 128 + a;
+        if (type === 0x90 && b > 0) {
+          if (!open.has(key)) open.set(key, []);
+          open.get(key).push({ tick, vel: b });
+        } else if (type === 0x80 || type === 0x90) {
+          const o = open.get(key)?.shift();
+          if (o) notes.push({ tick: o.tick, endTick: tick, note: a, vel: o.vel, ch, track: t });
+        }
+      }
+    }
+    for (const [key, list] of open) for (const o of list) notes.push({ tick: o.tick, endTick: tick, note: key % 128, vel: o.vel, ch: key >> 7, track: t });
+    lastTick = Math.max(lastTick, tick);
+    p = end;
+  }
+
+  // Tempo map: ticks → seconds
+  tempos.sort((a, b) => a.tick - b.tick);
+  if (!tempos.length || tempos[0].tick > 0) tempos.unshift({ tick: 0, uspq: 500000 });
+  const tmap = [];
+  let sec = 0;
+  tempos.forEach((tp, i) => {
+    if (i > 0) { const prev = tmap[i - 1]; sec = prev.sec + (tp.tick - prev.tick) * prev.uspq / 1e6 / ppq; }
+    tmap.push({ tick: tp.tick, sec, uspq: tp.uspq });
+  });
+  const toSec = tick => {
+    let lo = 0, hi = tmap.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (tmap[m].tick <= tick) lo = m; else hi = m - 1; }
+    const s = tmap[lo];
+    return s.sec + (tick - s.tick) * s.uspq / 1e6 / ppq;
+  };
+
+  for (const n of notes) { n.start = toSec(n.tick); n.end = Math.max(toSec(n.endTick), n.start + 0.05); }
+  notes.sort((a, b) => a.start - b.start || a.note - b.note);
+  const songEnd = notes.reduce((m, n) => Math.max(m, n.end), 0);
+
+  // Bars: from the time signature changes (4/4 if the file says nothing)
+  timeSigs.sort((a, b) => a.tick - b.tick);
+  if (!timeSigs.length || timeSigs[0].tick > 0) timeSigs.unshift({ tick: 0, num: 4, den: 4 });
+  const bars = [];
+  const endTick = notes.reduce((m, n) => Math.max(m, n.endTick), lastTick);
+  let tsi = 0, bt = 0;
+  while (bt <= endTick) {
+    while (tsi + 1 < timeSigs.length && timeSigs[tsi + 1].tick <= bt) tsi++;
+    const ts = timeSigs[tsi];
+    bars.push(toSec(bt));
+    let next = bt + Math.round(ts.num * ppq * 4 / ts.den);
+    // a time signature change in the middle of a bar restarts the count there
+    if (tsi + 1 < timeSigs.length && timeSigs[tsi + 1].tick < next) next = timeSigs[tsi + 1].tick;
+    bt = next;
+  }
+  bars.push(toSec(bt));
+
+  // Parts = track + channel, so a single-track MIDI can still be split by hand/instrument
+  const partMap = new Map();
+  for (const n of notes) {
+    const k = `${n.track}:${n.ch}`;
+    if (!partMap.has(k)) partMap.set(k, { key: k, track: n.track, ch: n.ch, count: 0, name: trackNames[n.track] || `Track ${n.track + 1}` });
+    partMap.get(k).count++;
+    n.part = k;
+  }
+  return {
+    notes, songEnd, bars, parts: [...partMap.values()],
+    bpm: Math.round(60e6 / tempos[0].uspq), timeSig: `${timeSigs[0].num}/${timeSigs[0].den}`,
+  };
+}
+
+// ---------- Song ----------
+let song = null;
+const enabledParts = new Set();
+const activeNotes = () => song ? song.notes.filter(n => enabledParts.has(n.part)) : [];
+
+$('file').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  stopAll();
+  try {
+    song = parseMidi(await f.arrayBuffer());
+  } catch (err) {
+    song = null;
+    $('songInfo').textContent = "couldn't read the file: " + err.message;
+    $('parts').innerHTML = '';
+    updateButtons();
+    return;
+  }
+  enabledParts.clear();
+  $('parts').innerHTML = '';
+  for (const part of song.parts) {
+    const on = part.ch !== 9; // channel 10 = drums
+    if (on) enabledParts.add(part.key);
+    const el = document.createElement('label');
+    el.className = 'part';
+    el.innerHTML = `<input type="checkbox" ${on ? 'checked' : ''}> ${part.name} · channel ${part.ch + 1}${part.ch === 9 ? ' (drums)' : ''} · ${part.count} notes`;
+    el.querySelector('input').onchange = ev => {
+      ev.target.checked ? enabledParts.add(part.key) : enabledParts.delete(part.key);
+      stopAll();
+      buildSegments();
+    };
+    $('parts').appendChild(el);
+  }
+  $('songInfo').textContent = `${f.name} · ${fmtTime(song.songEnd)} · ${song.bpm} BPM · ${song.timeSig} · ${song.bars.length - 1} bars`;
+  $('pos').max = song.songEnd;
+  $('pos').value = 0;
+  player.t = 0;
+  buildSegments();
+  updateButtons();
+  updatePos();
+};
+
+function updateButtons() {
+  const has = !!song;
+  $('play').disabled = !has; $('stop').disabled = !has; $('pos').disabled = !has;
+  $('learnStart').disabled = !has || learn.active; $('learnStop').disabled = !learn.active;
+  $('segFrom').disabled = !has || learn.active;
+  for (const id of ['segPrev', 'segAgain', 'segNext']) $(id).disabled = !learn.active;
+  $('play').textContent = player.playing && player.mode === 'song' ? '⏸ Pause' : '▶ Play';
+}
+
+// ---------- Sound on this computer ----------
+let actx = null, master = null;
+function audio() {
+  if (!actx) {
+    actx = new AudioContext();
+    master = actx.createGain();
+    const comp = actx.createDynamicsCompressor();
+    master.connect(comp).connect(actx.destination);
+  }
+  master.gain.value = +$('vol').value;
+  if (actx.state === 'suspended') actx.resume();
+  return actx;
+}
+$('vol').oninput = () => { if (master) master.gain.value = +$('vol').value; };
+
+function synthOn(note, vel) {
+  const ctx = audio(), t = ctx.currentTime;
+  const f = 440 * 2 ** ((note - 69) / 12);
+  const peak = 0.05 + 0.25 * (vel / 127) ** 1.5;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(peak, t + 0.005);
+  g.gain.exponentialRampToValueAtTime(peak * 0.35, t + 0.5);
+  g.gain.exponentialRampToValueAtTime(peak * 0.05, t + 4);
+  g.connect(master);
+  const oscs = [[1, 'triangle', 1], [2, 'sine', 0.35], [3, 'sine', 0.12]].map(([mult, type, amp]) => {
+    const o = ctx.createOscillator(), og = ctx.createGain();
+    o.type = type; o.frequency.value = f * mult; og.gain.value = amp;
+    o.connect(og).connect(g); o.start(t);
+    return o;
+  });
+  return { g, oscs };
+}
+function synthOff(v) {
+  if (!v) return;
+  const t = actx.currentTime;
+  if (v.g.gain.cancelAndHoldAtTime) v.g.gain.cancelAndHoldAtTime(t);
+  else { v.g.gain.cancelScheduledValues(t); }
+  v.g.gain.setTargetAtTime(0, t, 0.06);
+  v.oscs.forEach(o => o.stop(t + 0.4));
+}
+
+// ---------- Player ----------
+// Used both for playing the whole song and for the segments in Learn mode.
+const player = { playing: false, mode: null, t: 0, end: 0, list: [], idx: 0, active: [], last: 0, onEnd: null };
+
+function playerStart(list, from, to, mode, onEnd) {
+  playerHalt();
+  player.list = list; player.end = to; player.mode = mode; player.onEnd = onEnd;
+  player.t = from;
+  player.idx = firstIndexAt(list, from);
+  player.last = performance.now();
+  player.playing = true;
+  if ($('pcSound').checked || !pianoPlays()) audio();
+  updateButtons();
+}
+function firstIndexAt(list, t) {
+  let lo = 0, hi = list.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (list[m].start < t) lo = m + 1; else hi = m; }
+  return lo;
+}
+// Stops and releases every sounding note, without moving the position
+function playerHalt() {
+  player.playing = false;
+  for (const a of player.active) noteEnd(a);
+  player.active = [];
+}
+function noteStart(n) {
+  const a = { n, key: fold(n.note), voice: null };
+  songLightOn(a.key);
+  // with no piano connected, "sound on the piano" falls back to the computer
+  if ($('pcSound').checked || ($('pianoSound').checked && !midiChar)) a.voice = synthOn(n.note, n.vel);
+  if (pianoPlays()) sendNote([0x90, a.key, n.vel]);
+  return a;
+}
+function noteEnd(a) {
+  songLightOff(a.key);
+  synthOff(a.voice);
+  if (pianoPlays()) sendNote([0x80, a.key, 0]);
+}
+
+function tick() {
+  const now = performance.now();
+  if (player.playing) {
+    player.t += (now - player.last) / 1000 * +$('speed').value;
+    player.active = player.active.filter(a => { if (a.n.end <= player.t) { noteEnd(a); return false; } return true; });
+    while (player.idx < player.list.length && player.list[player.idx].start <= player.t && player.list[player.idx].start < player.end) {
+      const n = player.list[player.idx++];
+      // notes still sounding at the end of a segment are cut at the boundary
+      player.active.push(noteStart(n.end > player.end ? { ...n, end: player.end } : n));
+    }
+    if (player.t >= player.end && !player.active.length) {
+      playerHalt();
+      const cb = player.onEnd; player.onEnd = null;
+      updateButtons();
+      cb?.();
+    }
+    if (player.mode === 'song') updatePos();
+  }
+  player.last = now;
+}
+// The clock runs in a Worker: Chrome throttles the page's setInterval when the tab is
+// in the background, but not a Worker's.
+try {
+  const w = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 5)'], { type: 'text/javascript' })));
+  w.onmessage = tick;
+} catch { setInterval(tick, 5); }
+
+// When the piano makes the sound, the computer's sound drifts against it, so only one is allowed.
+// Switching output mid-note would leave lights or notes hanging, so playback pauses.
+$('pianoSound').onchange = () => {
+  if (player.playing) { playerHalt(); updateButtons(); }
+  if ($('pianoSound').checked) $('pcSound').checked = false;
+};
+$('pcSound').onchange = () => {
+  if (player.playing) { playerHalt(); updateButtons(); }
+  if ($('pcSound').checked) $('pianoSound').checked = false;
+};
+
+$('speed').oninput = () => { $('speedLbl').textContent = Math.round(+$('speed').value * 100) + '%'; };
+
+$('play').onclick = () => {
+  if (!song) return;
+  if (learn.active) learnStop();
+  if (player.playing && player.mode === 'song') { playerHalt(); updateButtons(); return; }
+  const from = player.mode === 'song' && player.t < song.songEnd ? player.t : +$('pos').value;
+  playerStart(activeNotes(), from >= song.songEnd ? 0 : from, song.songEnd, 'song', () => { player.t = 0; updatePos(); });
+};
+$('stop').onclick = () => { stopAll(); player.t = 0; $('pos').value = 0; updatePos(); };
+$('pos').oninput = () => {
+  const t = +$('pos').value;
+  if (player.playing && player.mode === 'song') playerStart(activeNotes(), t, song.songEnd, 'song', player.onEnd);
+  else { player.t = t; player.mode = 'song'; }
+  updatePos();
+};
+function updatePos() {
+  if (!song) return;
+  const t = Math.min(player.t, song.songEnd);
+  if (document.activeElement !== $('pos')) $('pos').value = t;
+  $('posLbl').textContent = `${fmtTime(t)} / ${fmtTime(song.songEnd)}`;
+}
+
+function stopAll() {
+  if (learn.active) learnStop();
+  playerHalt();
+  player.mode = null;
+  allLightsOff();
+  updateButtons();
+}
+
+// ---------- Tabs ----------
+document.querySelectorAll('.tab').forEach(tab => tab.onclick = () => {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+  document.querySelectorAll('.pane').forEach(p => { p.hidden = p.id !== tab.dataset.pane; });
+});
+
+// ---------- Learn mode ----------
+let segments = [];
+const learn = { active: false, seg: 0, phase: null, steps: [], step: 0, pressed: new Set(), run: 0 };
+
+// Splits the song into segments of whole bars: bars are grouped until they pass ~N seconds.
+function buildSegments() {
+  segments = [];
+  if (!song) return;
+  const target = Math.max(1, +$('segSecs').value || 5);
+  const end = song.songEnd;
+  const b = song.bars;
+  let s = 0;
+  for (let i = 1; i < b.length && b[s] < end; i++) {
+    if (b[i] - b[s] >= target - 0.25 || i === b.length - 1 || b[i] >= end) {
+      segments.push({ start: b[s], end: Math.min(b[i], end), bars: [s + 1, i] });
+      s = i;
+    }
+  }
+  const notes = activeNotes();
+  segments.forEach(sg => { sg.notes = notes.filter(n => n.start >= sg.start && n.start < sg.end); });
+  segments = segments.filter(sg => sg.notes.length);
+  $('segFrom').innerHTML = segments.map((sg, i) =>
+    `<option value="${i}">${i + 1} (bar ${sg.bars[0]}) · ${fmtTime(sg.start)}</option>`).join('');
+}
+$('segSecs').onchange = () => { if (!learn.active) buildSegments(); };
+
+// Steps = notes that start together (chords): all of them must be played to move on
+function buildSteps(notes) {
+  const steps = [];
+  for (const n of notes) {
+    const last = steps[steps.length - 1];
+    const key = fold(n.note);
+    if (last && n.start - last.start < 0.06) last.keys.add(key);
+    else steps.push({ start: n.start, keys: new Set([key]) });
+  }
+  return steps;
+}
+
+function learnMsg(msg, sub = '') { $('learnMsg').textContent = msg; $('learnSub').textContent = sub; }
+const barsLabel = b => b[0] === b[1] ? ` · bar ${b[0]}` : ` · bars ${b[0]}–${b[1]}`;
+const segLabel = i => `Segment ${i + 1} of ${segments.length}${barsLabel(segments[i].bars)}`;
+
+$('learnStart').onclick = () => {
+  if (!song || !segments.length) { learnMsg('The selected parts have no notes.'); return; }
+  stopAll();
+  learn.active = true;
+  updateButtons();
+  startSegment(+$('segFrom').value || 0);
+};
+$('learnStop').onclick = learnStop;
+function learnStop() {
+  learn.active = false; learn.phase = null; learn.run++;
+  playerHalt();
+  allLightsOff();
+  learnMsg('');
+  updateButtons();
+}
+$('segPrev').onclick = () => startSegment(Math.max(0, learn.seg - 1));
+$('segAgain').onclick = () => startSegment(learn.seg);
+$('segNext').onclick = () => startSegment(learn.seg + 1);
+
+async function startSegment(i) {
+  const run = ++learn.run; // cancels any previous segment that was still waiting
+  playerHalt();
+  allLightsOff();
+  if (i >= segments.length) {
+    learn.phase = null;
+    learnMsg('You finished the song! 🎉', 'Pick a segment to start again.');
+    learn.active = false; updateButtons();
+    return;
+  }
+  learn.seg = i;
+  $('segFrom').value = i;
+  const sg = segments[i];
+  if ($('listenFirst').checked) {
+    learn.phase = 'listen';
+    learnMsg('Listen…', segLabel(i));
+    await new Promise(res => playerStart(sg.notes, sg.start, sg.end, 'learn', res));
+    if (run !== learn.run) return;
+    await sleep(600);
+    if (run !== learn.run) return;
+    allLightsOff();
+  }
+  learn.phase = 'play';
+  learn.steps = buildSteps(sg.notes);
+  learn.step = 0;
+  showStep();
+}
+
+function showStep() {
+  const st = learn.steps[learn.step];
+  learn.pressed = new Set();
+  if (!st) {
+    learn.phase = 'done';
+    const run = learn.run;
+    learnMsg('Nice!', segLabel(learn.seg));
+    setTimeout(() => { if (run === learn.run) startSegment(learn.seg + 1); }, 900);
+    return;
+  }
+  st.keys.forEach(k => setLight(k, true));
+  learnMsg('Play: ' + [...st.keys].sort((a, b) => a - b).map(noteName).join(' + '),
+    `${segLabel(learn.seg)} · step ${learn.step + 1} of ${learn.steps.length}`);
+}
+
+function onUserNote(note) {
+  if (!learn.active || learn.phase !== 'play') return;
+  const st = learn.steps[learn.step];
+  if (!st || !st.keys.has(note)) return;
+  learn.pressed.add(note);
+  if ([...st.keys].every(k => learn.pressed.has(k))) {
+    st.keys.forEach(k => setLight(k, false));
+    learn.step++;
+    showStep();
+  }
+}
+
+buildKeyboard();
+</script>
+</body>
+</html>
