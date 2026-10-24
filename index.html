@@ -46,7 +46,10 @@ input[type=range] { accent-color: var(--accent); }
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
 .tab { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 12px; color: var(--muted); }
 .tab.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
-.pane[hidden] { display: none; }
+.pane[hidden], section[hidden] { display: none; }
+/* the score is always drawn black on white, also in dark mode */
+.score-box { margin-top: 10px; max-height: 460px; overflow: auto; background: #fff; border-radius: 8px; }
+#score .hl path { fill: #2f6fdf; stroke: #2f6fdf; }
 #pos { flex: 1; min-width: 160px; }
 .mono { font-variant-numeric: tabular-nums; }
 .learn-msg { font-size: 18px; font-weight: 600; margin: 4px 0 2px; min-height: 27px; }
@@ -64,9 +67,17 @@ input[type=range] { accent-color: var(--accent); }
 .about p, .about ul { margin: 0 0 10px; }
 .about ul { padding-left: 20px; }
 .about li { margin-bottom: 4px; }
+.about a { color: var(--accent); }
 .about code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .about details { margin-top: 6px; }
 .about summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+body.dragging::after {
+  content: 'Drop the file to load it'; position: fixed; inset: 12px; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
+  border: 3px dashed var(--accent); border-radius: 14px;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  font-size: 22px; font-weight: 600; color: var(--accent); pointer-events: none;
+}
 .about .fine { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
 </style>
 </head>
@@ -74,7 +85,7 @@ input[type=range] { accent-color: var(--accent); }
 <main>
   <div>
     <h1>Light-Up Piano</h1>
-    <p class="tagline">A browser replacement for the POP Piano app: play MIDI files on your lighted-key piano and learn songs one segment at a time.</p>
+    <p class="tagline">A browser replacement for the POP Piano app: play MIDI and MusicXML files on your lighted-key piano, follow along on the score, and learn songs one segment at a time.</p>
   </div>
 
   <section>
@@ -91,8 +102,8 @@ input[type=range] { accent-color: var(--accent); }
   <section>
     <h2>Song</h2>
     <div class="row">
-      <label class="filebtn">Open .mid…<input type="file" id="file" accept=".mid,.midi,audio/midi" hidden></label>
-      <span class="status" id="songInfo">no file loaded</span>
+      <label class="filebtn">Open file…<input type="file" id="file" accept=".mid,.midi,.musicxml,.xml,.mxl,audio/midi" hidden></label>
+      <span class="status" id="songInfo">no file loaded · open or drop a MIDI (.mid) or MusicXML (.musicxml, .xml, .mxl) file anywhere on the page</span>
     </div>
     <div class="parts" id="parts"></div>
     <div class="row">
@@ -134,6 +145,11 @@ input[type=range] { accent-color: var(--accent); }
     </div>
   </section>
 
+  <section id="scoreSection" hidden>
+    <div class="row"><h2 style="margin:0">Score</h2><span class="status" id="scoreNote"></span></div>
+    <div class="score-box" id="scoreBox"><div id="score"></div></div>
+  </section>
+
   <section>
     <div class="kbd-wrap"><div class="kbd" id="kbd"></div></div>
     <p class="hint">Click a key to turn its light on or off (in Learn mode a click counts as playing it). <span style="color:var(--lit)">■</span> lit · <span style="color:var(--played)">■</span> you're pressing it.</p>
@@ -147,6 +163,8 @@ input[type=range] { accent-color: var(--accent); }
       <li><b>Look for a Bluetooth device named <code>GZUT-MIDI</code></b> when you connect. The connect dialog only lists devices whose name starts with "GZUT" or that offer Bluetooth MIDI.</li>
       <li><b>Use desktop Chrome or Edge.</b> The page needs Web Bluetooth, which Safari and Firefox don't support.</li>
       <li><b>The piano accepts one connection at a time.</b> Close POP Piano on your phone and don't pair the piano in your computer's MIDI settings (Audio MIDI Setup on a Mac) before connecting here.</li>
+      <li><b>Opens MIDI (.mid) and MusicXML (.musicxml, .xml, compressed .mxl) files.</b> MusicXML gives the real notation and bar numbers, including repeats. For MIDI files the score is generated from the notes, so the notation is approximate.</li>
+      <li><b>The score follows along:</b> a cursor and blue notes show what's playing, or, in Learn mode, what you have to play next. The score is drawn with <a href="https://opensheetmusicdisplay.org/">OpenSheetMusicDisplay</a>, downloaded the first time a file is opened.</li>
       <li><b>Regular MIDI apps can't drive the lights.</b> The piano's firmware only accepts Bluetooth MIDI packets with a fixed timestamp, and the operating system's MIDI stack (including Web MIDI) always sends real timestamps. That's why this page talks to Bluetooth directly.</li>
     </ul>
     <details>
@@ -216,7 +234,10 @@ function buildKeyboard() {
 }
 $('size').onchange = buildKeyboard;
 let resizeTimer;
-window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(buildKeyboard, 150); });
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { buildKeyboard(); rerenderScore(); }, 250);
+});
 const markKey = (n, cls, on) => keyEls.get(n)?.classList.toggle(cls, on);
 
 function onKeyClick(n) {
@@ -389,7 +410,7 @@ function parseMidi(buf) {
   if (ppq & 0x8000) throw new Error('SMPTE timing is not supported');
   let p = 8 + d.getUint32(4);
   const notes = [], tempos = [], timeSigs = [], trackNames = [];
-  let lastTick = 0;
+  let lastTick = 0, keyFifths = null;
   for (let t = 0; t < ntracks && p + 8 <= buf.byteLength; t++) {
     const id = str(p, 4), len = d.getUint32(p + 4);
     p += 8;
@@ -408,6 +429,7 @@ function parseMidi(buf) {
         if (type === 0x03 && !trackNames[t]) trackNames[t] = new TextDecoder().decode(new Uint8Array(buf, at, l)).trim();
         if (type === 0x51) tempos.push({ tick, uspq: (d.getUint8(at) << 16) | (d.getUint8(at + 1) << 8) | d.getUint8(at + 2) });
         if (type === 0x58) timeSigs.push({ tick, num: d.getUint8(at), den: 2 ** d.getUint8(at + 1) });
+        if (type === 0x59 && keyFifths == null) keyFifths = (d.getUint8(at) << 24) >> 24; // signed: sharps > 0, flats < 0
         if (type === 0x2F) break;
       } else if (st === 0xF0 || st === 0xF7) {
         p += vlq();
@@ -453,32 +475,303 @@ function parseMidi(buf) {
   // Bars: from the time signature changes (4/4 if the file says nothing)
   timeSigs.sort((a, b) => a.tick - b.tick);
   if (!timeSigs.length || timeSigs[0].tick > 0) timeSigs.unshift({ tick: 0, num: 4, den: 4 });
-  const bars = [];
+  const bars = [], barTicks = [];
   const endTick = notes.reduce((m, n) => Math.max(m, n.endTick), lastTick);
   let tsi = 0, bt = 0;
   while (bt <= endTick) {
     while (tsi + 1 < timeSigs.length && timeSigs[tsi + 1].tick <= bt) tsi++;
     const ts = timeSigs[tsi];
     bars.push(toSec(bt));
+    barTicks.push(bt);
     let next = bt + Math.round(ts.num * ppq * 4 / ts.den);
     // a time signature change in the middle of a bar restarts the count there
     if (tsi + 1 < timeSigs.length && timeSigs[tsi + 1].tick < next) next = timeSigs[tsi + 1].tick;
     bt = next;
   }
   bars.push(toSec(bt));
+  barTicks.push(bt);
 
   // Parts = track + channel, so a single-track MIDI can still be split by hand/instrument
   const partMap = new Map();
   for (const n of notes) {
     const k = `${n.track}:${n.ch}`;
-    if (!partMap.has(k)) partMap.set(k, { key: k, track: n.track, ch: n.ch, count: 0, name: trackNames[n.track] || `Track ${n.track + 1}` });
+    if (!partMap.has(k)) {
+      const name = trackNames[n.track] || `Track ${n.track + 1}`;
+      partMap.set(k, { key: k, count: 0, drums: n.ch === 9, label: `${name} · channel ${n.ch + 1}${n.ch === 9 ? ' (drums)' : ''}` });
+    }
     partMap.get(k).count++;
     n.part = k;
   }
   return {
-    notes, songEnd, bars, parts: [...partMap.values()],
+    kind: 'midi', notes, songEnd, bars, parts: [...partMap.values()],
     bpm: Math.round(60e6 / tempos[0].uspq), timeSig: `${timeSigs[0].num}/${timeSigs[0].den}`,
+    // used to draw the score
+    ppq, toSec, barTicks, timeSigs, keyFifths: keyFifths ?? 0,
   };
+}
+
+// ---------- Score (OpenSheetMusicDisplay) ----------
+// The renderer is only downloaded the first time a score is needed.
+const OSMD_URL = 'https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.9.9/build/opensheetmusicdisplay.min.js';
+let osmd = null, osmdLoading = null;
+let scoreSteps = null;  // song time (s) of each cursor position, in cursor order
+let scoreIdx = 0;       // cursor position currently shown
+let scoreToken = 0;     // drops a score that finishes rendering after another file was loaded
+let hlEls = [];
+
+function loadOsmd() {
+  osmdLoading ??= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = OSMD_URL;
+    s.onload = resolve;
+    s.onerror = () => { osmdLoading = null; reject(new Error("couldn't load the score renderer (are you online?)")); };
+    document.head.appendChild(s);
+  });
+  return osmdLoading;
+}
+
+async function renderScore(content) {
+  await loadOsmd();
+  $('scoreSection').hidden = false; // OSMD needs a visible container to measure its width
+  osmd ??= new opensheetmusicdisplay.OpenSheetMusicDisplay($('score'), { autoResize: false, backend: 'svg', drawTitle: true, followCursor: false });
+  await osmd.load(content);
+  osmd.render();
+  osmd.cursor.show();
+  osmd.cursor.reset();
+  scoreIdx = 0;
+  hlEls = [];
+  $('scoreBox').scrollTop = 0;
+}
+
+// Walks every cursor position (following repeats); visit(iterator, time in whole notes)
+function walkScore(visit) {
+  const c = osmd.cursor;
+  c.reset();
+  const it = c.Iterator;
+  for (let guard = 0; !it.EndReached && guard < 500000; guard++) {
+    visit(it, it.CurrentEnrolledTimestamp.RealValue);
+    it.moveToNext();
+  }
+  c.reset();
+}
+
+// MusicXML (.musicxml/.xml, or zipped .mxl): the score is drawn first and the notes to
+// play are read back from it, so playback, bars and the cursor always agree.
+async function loadMusicXml(buf) {
+  const bytes = new Uint8Array(buf);
+  let content;
+  if (bytes[0] === 0x50 && bytes[1] === 0x4B) { // "PK": zip, OSMD takes it as a binary string
+    content = '';
+    for (let i = 0; i < bytes.length; i += 8192) content += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  } else content = new TextDecoder().decode(bytes);
+  try { await renderScore(content); }
+  catch (e) { throw new Error(/renderer/.test(e.message) ? e.message : 'not a MIDI or MusicXML file'); }
+
+  const sheet = osmd.Sheet;
+  const notes = [], steps = [], bars = [], barNums = [], partMap = new Map();
+  const bpm0 = sheet.DefaultStartTempoInBpm || 120;
+  let bpm = bpm0, sec = 0, lastW = 0, lastMeasure = -1;
+  walkScore((it, w) => {
+    sec += Math.max(0, w - lastW) * 240 / bpm; // a whole note lasts 4 beats
+    lastW = w;
+    const m = it.CurrentMeasure;
+    if (m?.TempoInBPM > 0) bpm = m.TempoInBPM;
+    if (it.CurrentMeasureIndex !== lastMeasure) {
+      lastMeasure = it.CurrentMeasureIndex;
+      bars.push(sec);
+      barNums.push(m?.MeasureNumber ?? bars.length);
+    }
+    steps.push(sec);
+    for (const ve of it.CurrentVoiceEntries || []) {
+      if (ve.IsGrace) continue;
+      const staff = ve.ParentSourceStaffEntry.ParentStaff, inst = staff.ParentInstrument;
+      const key = 'x' + staff.idInMusicSheet;
+      for (const n of ve.Notes) {
+        if (n.isRest() || typeof n.halfTone !== 'number') continue;
+        const tie = n.NoteTie;
+        if (tie && tie.StartNote !== n) continue; // tied continuations extend the first note
+        const len = tie ? tie.Notes.reduce((s, t) => s + t.Length.RealValue, 0) : n.Length.RealValue;
+        if (!partMap.has(key)) {
+          const idx = inst.Staves.indexOf(staff);
+          const staffName = inst.Staves.length < 2 ? '' : idx === 0 ? ' · upper staff' : idx === 1 ? ' · lower staff' : ` · staff ${idx + 1}`;
+          partMap.set(key, { key, count: 0, drums: false, label: (inst.Name || 'Instrument') + staffName });
+        }
+        partMap.get(key).count++;
+        notes.push({ start: sec, end: sec + Math.max(len * 240 / bpm, 0.05), note: n.halfTone + 12, vel: 80, part: key });
+      }
+    }
+  });
+  notes.sort((a, b) => a.start - b.start || a.note - b.note);
+  const songEnd = Math.max(notes.reduce((m, n) => Math.max(m, n.end), 0), sec);
+  bars.push(songEnd);
+  scoreSteps = steps;
+  $('scoreNote').textContent = '';
+  highlightScore();
+  const ts = sheet.SourceMeasures[0]?.ActiveTimeSignature;
+  return {
+    kind: 'xml', notes, songEnd, bars, barNums, parts: [...partMap.values()],
+    bpm: Math.round(bpm0), timeSig: ts ? `${ts.Numerator}/${ts.Denominator}` : '4/4',
+  };
+}
+
+// MIDI has no notation, so a score is generated: notes are quantized to 16ths, split at
+// middle C into treble and bass staves, and overlapping notes in a staff are shortened.
+// Playback still uses the real notes; this is only for reading along.
+function midiToMusicXml(song, notes) {
+  const q = song.ppq / 4; // ticks per 16th (divisions = 4 per quarter)
+  const barQ = song.barTicks.map(t => Math.round(t / q));
+  const nBars = barQ.length - 1, endQ = barQ[nBars];
+  const measureOf = pos => { let lo = 0, hi = nBars - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (barQ[m] <= pos) lo = m; else hi = m - 1; } return lo; };
+  const measures = Array.from({ length: nBars }, () => [[], []]);
+  const LENGTHS = [16, 12, 8, 6, 4, 3, 2, 1];
+
+  // Puts a note/chord (or a rest if pitches is null), split at bar lines and into
+  // writable lengths, tied together
+  function place(staff, start, len, pitches) {
+    const end = start + len;
+    let pos = start;
+    while (pos < end) {
+      const m = measureOf(pos);
+      let left = Math.min(end, barQ[m + 1]) - pos;
+      while (left > 0) {
+        const d = LENGTHS.find(l => l <= left);
+        measures[m][staff].push({ d, pitches, tieStop: !!pitches && pos > start, tieStart: !!pitches && pos + d < end });
+        pos += d; left -= d;
+      }
+    }
+  }
+
+  [notes.filter(n => n.note >= 60), notes.filter(n => n.note < 60)].forEach((list, staff) => {
+    const chords = new Map();
+    for (const n of list) {
+      const st = Math.round(n.tick / q), en = Math.max(st + 1, Math.round(n.endTick / q));
+      const c = chords.get(st) || { start: st, end: 0, pitches: new Set() };
+      c.end = Math.max(c.end, en);
+      c.pitches.add(n.note);
+      chords.set(st, c);
+    }
+    const evs = [...chords.values()].sort((a, b) => a.start - b.start);
+    let pos = 0;
+    evs.forEach((c, i) => {
+      if (c.start >= endQ) return;
+      if (c.start > pos) place(staff, pos, c.start - pos, null);
+      const end = Math.min(c.end, evs[i + 1]?.start ?? Infinity, endQ);
+      place(staff, c.start, end - c.start, [...c.pitches].sort((a, b) => a - b));
+      pos = end;
+    });
+    if (pos < endQ) place(staff, pos, endQ - pos, null);
+  });
+
+  const SHARPS = [['C', 0], ['C', 1], ['D', 0], ['D', 1], ['E', 0], ['F', 0], ['F', 1], ['G', 0], ['G', 1], ['A', 0], ['A', 1], ['B', 0]];
+  const FLATS = [['C', 0], ['D', -1], ['D', 0], ['E', -1], ['E', 0], ['F', 0], ['G', -1], ['G', 0], ['A', -1], ['A', 0], ['B', -1], ['B', 0]];
+  const spell = song.keyFifths < 0 ? FLATS : SHARPS;
+  const TYPES = { 16: ['whole', 0], 12: ['half', 1], 8: ['half', 0], 6: ['quarter', 1], 4: ['quarter', 0], 3: ['eighth', 1], 2: ['eighth', 0], 1: ['16th', 0] };
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  const noteXml = (ev, staff) => {
+    const tail = `<voice>${staff}</voice>`;
+    if (ev.measureRest) return `<note><rest measure="yes"/><duration>${ev.d}</duration>${tail}<staff>${staff}</staff></note>`;
+    const [type, dot] = TYPES[ev.d];
+    const kind = `<type>${type}</type>${dot ? '<dot/>' : ''}`;
+    if (!ev.pitches) return `<note><rest/><duration>${ev.d}</duration>${tail}${kind}<staff>${staff}</staff></note>`;
+    const ties = (ev.tieStop ? '<tie type="stop"/>' : '') + (ev.tieStart ? '<tie type="start"/>' : '');
+    const tied = ev.tieStop || ev.tieStart
+      ? `<notations>${ev.tieStop ? '<tied type="stop"/>' : ''}${ev.tieStart ? '<tied type="start"/>' : ''}</notations>` : '';
+    return ev.pitches.map((p, i) => {
+      const [step, alter] = spell[p % 12];
+      return `<note>${i ? '<chord/>' : ''}<pitch><step>${step}</step>${alter ? `<alter>${alter}</alter>` : ''}<octave>${Math.floor(p / 12) - 1}</octave></pitch>` +
+        `<duration>${ev.d}</duration>${ties}${tail}${kind}<staff>${staff}</staff>${tied}</note>`;
+    }).join('');
+  };
+
+  let lastTs = '';
+  const body = measures.map((staves, m) => {
+    const len = barQ[m + 1] - barQ[m];
+    let ts = song.timeSigs[0];
+    for (const t of song.timeSigs) if (t.tick <= song.barTicks[m]) ts = t;
+    const tsKey = `${ts.num}/${ts.den}`;
+    let attrs = '';
+    if (m === 0) {
+      attrs = `<attributes><divisions>4</divisions><key><fifths>${song.keyFifths}</fifths></key><time><beats>${ts.num}</beats><beat-type>${ts.den}</beat-type></time>` +
+        '<staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>';
+    } else if (tsKey !== lastTs) {
+      attrs = `<attributes><time><beats>${ts.num}</beats><beat-type>${ts.den}</beat-type></time></attributes>`;
+    }
+    lastTs = tsKey;
+    const xml = staves.map((evs, s) => {
+      if (evs.every(ev => !ev.pitches)) evs = [{ d: len, measureRest: true }];
+      return evs.map(ev => noteXml(ev, s + 1)).join('');
+    });
+    return `<measure number="${m + 1}">${attrs}${xml[0]}<backup><duration>${len}</duration></backup>${xml[1]}</measure>`;
+  }).join('');
+
+  return `<?xml version="1.0" encoding="UTF-8"?><score-partwise version="3.1">` +
+    `<work><work-title>${esc(song.fileName.replace(/\.midi?$/i, ''))}</work-title></work>` +
+    `<part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>` +
+    `<part id="P1">${body}</part></score-partwise>`;
+}
+
+async function drawMidiScore() {
+  const token = ++scoreToken;
+  scoreSteps = null;
+  const notes = activeNotes();
+  if (!notes.length) { $('scoreSection').hidden = true; return; }
+  try {
+    await renderScore(midiToMusicXml(song, notes));
+    if (token !== scoreToken) return;
+    const steps = [];
+    walkScore((it, w) => steps.push(song.toSec(w * 4 * song.ppq)));
+    scoreSteps = steps;
+    $('scoreNote').textContent = 'generated from the MIDI file, so the notation is approximate';
+    highlightScore();
+    if (player.playing || learn.active) scoreTo(learn.phase === 'play' ? learn.steps[learn.step]?.start ?? 0 : player.t);
+  } catch (e) {
+    if (token !== scoreToken) return;
+    console.warn('score', e);
+    $('scoreSection').hidden = true;
+  }
+}
+
+// Moves the cursor to the last position that starts at or before song time t
+function scoreTo(t) {
+  if (!scoreSteps?.length) return;
+  const target = t + 0.08; // tolerance for quantized/rounded times
+  let lo = 0, hi = scoreSteps.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (scoreSteps[m] <= target) lo = m; else hi = m - 1; }
+  if (lo === scoreIdx) return;
+  const c = osmd.cursor;
+  if (lo < scoreIdx) { c.reset(); scoreIdx = 0; }
+  while (scoreIdx < lo) { c.next(); scoreIdx++; }
+  highlightScore();
+}
+
+// Colors the notes under the cursor and keeps the cursor in view inside the score box
+function highlightScore() {
+  hlEls.forEach(e => e.classList.remove('hl'));
+  hlEls = [];
+  try {
+    for (const g of osmd.cursor.GNotesUnderCursor()) {
+      const el = g.getSVGGElement?.();
+      if (el) { el.classList.add('hl'); hlEls.push(el); }
+    }
+  } catch { /* nothing under the cursor */ }
+  const el = osmd.cursor.cursorElement, box = $('scoreBox');
+  if (!el) return;
+  const r = el.getBoundingClientRect(), b = box.getBoundingClientRect();
+  if (r.top < b.top || r.bottom > b.bottom) box.scrollTop += r.top - b.top - 16;
+}
+
+// Redraws the score for the new width and puts the cursor back where it was
+function rerenderScore() {
+  if (!osmd || !scoreSteps || $('scoreSection').hidden) return;
+  const k = scoreIdx;
+  osmd.render();
+  const c = osmd.cursor;
+  c.show(); c.reset();
+  scoreIdx = 0;
+  while (scoreIdx < k) { c.next(); scoreIdx++; }
+  hlEls = [];
+  highlightScore();
 }
 
 // ---------- Song ----------
@@ -486,14 +779,38 @@ let song = null;
 const enabledParts = new Set();
 const activeNotes = () => song ? song.notes.filter(n => enabledParts.has(n.part)) : [];
 
-$('file').onchange = async e => {
-  const f = e.target.files[0];
-  if (!f) return;
+$('file').onchange = e => {
+  if (e.target.files[0]) loadFile(e.target.files[0]);
+  e.target.value = ''; // so the same file can be opened again
+};
+
+// Drag and drop: a .mid file can be dropped anywhere on the page
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+window.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+window.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('dragleave', e => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+window.addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0; document.body.classList.remove('dragging');
+  const f = [...e.dataTransfer.files].find(f => /\.(midi?|musicxml|xml|mxl)$/i.test(f.name)) || e.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+
+async function loadFile(f) {
   stopAll();
+  scoreToken++;
+  scoreSteps = null;
+  $('scoreSection').hidden = true;
   try {
-    song = parseMidi(await f.arrayBuffer());
+    const buf = await f.arrayBuffer();
+    const isMidi = String.fromCharCode(...new Uint8Array(buf, 0, Math.min(4, buf.byteLength))) === 'MThd';
+    song = isMidi ? parseMidi(buf) : await loadMusicXml(buf);
+    song.fileName = f.name;
   } catch (err) {
     song = null;
+    $('scoreSection').hidden = true;
     $('songInfo').textContent = "couldn't read the file: " + err.message;
     $('parts').innerHTML = '';
     updateButtons();
@@ -502,18 +819,20 @@ $('file').onchange = async e => {
   enabledParts.clear();
   $('parts').innerHTML = '';
   for (const part of song.parts) {
-    const on = part.ch !== 9; // channel 10 = drums
+    const on = !part.drums;
     if (on) enabledParts.add(part.key);
     const el = document.createElement('label');
     el.className = 'part';
-    el.innerHTML = `<input type="checkbox" ${on ? 'checked' : ''}> ${part.name} · channel ${part.ch + 1}${part.ch === 9 ? ' (drums)' : ''} · ${part.count} notes`;
+    el.innerHTML = `<input type="checkbox" ${on ? 'checked' : ''}> ${part.label} · ${part.count} notes`;
     el.querySelector('input').onchange = ev => {
       ev.target.checked ? enabledParts.add(part.key) : enabledParts.delete(part.key);
       stopAll();
       buildSegments();
+      if (song.kind === 'midi') drawMidiScore(); // the generated score only shows the selected parts
     };
     $('parts').appendChild(el);
   }
+  if (song.kind === 'midi') drawMidiScore();
   $('songInfo').textContent = `${f.name} · ${fmtTime(song.songEnd)} · ${song.bpm} BPM · ${song.timeSig} · ${song.bars.length - 1} bars`;
   $('pos').max = song.songEnd;
   $('pos').value = 0;
@@ -521,7 +840,7 @@ $('file').onchange = async e => {
   buildSegments();
   updateButtons();
   updatePos();
-};
+}
 
 function updateButtons() {
   const has = !!song;
@@ -630,6 +949,7 @@ function tick() {
       cb?.();
     }
     if (player.mode === 'song') updatePos();
+    if (player.playing) scoreTo(player.t);
   }
   player.last = now;
 }
@@ -660,12 +980,13 @@ $('play').onclick = () => {
   const from = player.mode === 'song' && player.t < song.songEnd ? player.t : +$('pos').value;
   playerStart(activeNotes(), from >= song.songEnd ? 0 : from, song.songEnd, 'song', () => { player.t = 0; updatePos(); });
 };
-$('stop').onclick = () => { stopAll(); player.t = 0; $('pos').value = 0; updatePos(); };
+$('stop').onclick = () => { stopAll(); player.t = 0; $('pos').value = 0; updatePos(); scoreTo(0); };
 $('pos').oninput = () => {
   const t = +$('pos').value;
   if (player.playing && player.mode === 'song') playerStart(activeNotes(), t, song.songEnd, 'song', player.onEnd);
   else { player.t = t; player.mode = 'song'; }
   updatePos();
+  scoreTo(t);
 };
 function updatePos() {
   if (!song) return;
@@ -699,10 +1020,11 @@ function buildSegments() {
   const target = Math.max(1, +$('segSecs').value || 5);
   const end = song.songEnd;
   const b = song.bars;
+  const barNum = k => song.barNums?.[k] ?? k + 1; // MusicXML has its own numbering (and repeats)
   let s = 0;
   for (let i = 1; i < b.length && b[s] < end; i++) {
     if (b[i] - b[s] >= target - 0.25 || i === b.length - 1 || b[i] >= end) {
-      segments.push({ start: b[s], end: Math.min(b[i], end), bars: [s + 1, i] });
+      segments.push({ start: b[s], end: Math.min(b[i], end), bars: [barNum(s), barNum(i - 1)] });
       s = i;
     }
   }
@@ -788,6 +1110,7 @@ function showStep() {
     return;
   }
   st.keys.forEach(k => setLight(k, true));
+  scoreTo(st.start);
   learnMsg('Play: ' + [...st.keys].sort((a, b) => a - b).map(noteName).join(' + '),
     `${segLabel(learn.seg)} · step ${learn.step + 1} of ${learn.steps.length}`);
 }
