@@ -48,7 +48,10 @@ input[type=range] { accent-color: var(--accent); }
 .tab.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
 .pane[hidden], section[hidden] { display: none; }
 /* the score is always drawn black on white, also in dark mode */
-.score-box { margin-top: 10px; max-height: 460px; overflow: auto; background: #fff; border-radius: 8px; }
+/* height is set by fitScore() so the controls, score and keyboard fit on one screen */
+.score-box { margin-top: 10px; height: 420px; overflow: auto; background: #fff; border-radius: 8px; }
+.zoom-btn { padding: 2px 10px; font-size: 15px; line-height: 1.2; }
+#zoomLbl { min-width: 40px; text-align: center; }
 #score .hl path { fill: #2f6fdf; stroke: #2f6fdf; }
 #pos { flex: 1; min-width: 160px; }
 .mono { font-variant-numeric: tabular-nums; }
@@ -63,6 +66,13 @@ input[type=range] { accent-color: var(--accent); }
 .k.played { background: var(--played) !important; }
 .k .lbl { position: absolute; bottom: 22px; width: 100%; text-align: center; font-size: 9px; color: #777; pointer-events: none; }
 .hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+/* short screens (e.g. an iPad in landscape): a shorter keyboard leaves more room for the score */
+@media (max-height: 900px) {
+  .kbd, .k.w { height: 112px; }
+  .k.b { height: 70px; }
+  .k.lit { box-shadow: inset 0 -14px 0 var(--lit); }
+  .k .lbl { bottom: 17px; }
+}
 .about { font-size: 13px; }
 .about p, .about ul { margin: 0 0 10px; }
 .about ul { padding-left: 20px; }
@@ -102,7 +112,7 @@ body.dragging::after {
   <section>
     <h2>Song</h2>
     <div class="row">
-      <label class="filebtn">Open file…<input type="file" id="file" accept=".mid,.midi,.musicxml,.xml,.mxl,audio/midi" hidden></label>
+      <label class="filebtn">Open file…<input type="file" id="file" accept=".mid,.midi,.musicxml,.xml,.mxl,audio/midi,application/vnd.recordare.musicxml,application/vnd.recordare.musicxml+xml" hidden></label>
       <span class="status" id="songInfo">no file loaded · open or drop a MIDI (.mid) or MusicXML (.musicxml, .xml, .mxl) file anywhere on the page</span>
     </div>
     <div class="parts" id="parts"></div>
@@ -114,7 +124,7 @@ body.dragging::after {
     </div>
   </section>
 
-  <section>
+  <section id="controlsSection">
     <div class="tabs">
       <button class="tab active" data-pane="playPane">Play</button>
       <button class="tab" data-pane="learnPane">Learn</button>
@@ -146,11 +156,18 @@ body.dragging::after {
   </section>
 
   <section id="scoreSection" hidden>
-    <div class="row"><h2 style="margin:0">Score</h2><span class="status" id="scoreNote"></span></div>
+    <div class="row">
+      <h2 style="margin:0">Score</h2><span class="status" id="scoreNote"></span>
+      <span class="spacer"></span>
+      <label>Zoom</label>
+      <button class="zoom-btn" id="zoomOut" title="Smaller">−</button>
+      <span class="mono status" id="zoomLbl">100%</span>
+      <button class="zoom-btn" id="zoomIn" title="Bigger">+</button>
+    </div>
     <div class="score-box" id="scoreBox"><div id="score"></div></div>
   </section>
 
-  <section>
+  <section id="keysSection">
     <div class="kbd-wrap"><div class="kbd" id="kbd"></div></div>
     <p class="hint">Click a key to turn its light on or off (in Learn mode a click counts as playing it). <span style="color:var(--lit)">■</span> lit · <span style="color:var(--played)">■</span> you're pressing it.</p>
   </section>
@@ -236,7 +253,7 @@ $('size').onchange = buildKeyboard;
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { buildKeyboard(); rerenderScore(); }, 250);
+  resizeTimer = setTimeout(() => { buildKeyboard(); fitScore(); rerenderScore(); }, 250);
 });
 const markKey = (n, cls, on) => keyEls.get(n)?.classList.toggle(cls, on);
 
@@ -533,8 +550,10 @@ function loadOsmd() {
 async function renderScore(content) {
   await loadOsmd();
   $('scoreSection').hidden = false; // OSMD needs a visible container to measure its width
+  fitScore();
   osmd ??= new opensheetmusicdisplay.OpenSheetMusicDisplay($('score'), { autoResize: false, backend: 'svg', drawTitle: true, followCursor: false });
   await osmd.load(content);
+  osmd.zoom = scoreZoom;
   osmd.render();
   osmd.cursor.show();
   osmd.cursor.reset();
@@ -711,7 +730,7 @@ function midiToMusicXml(song, notes) {
     `<part id="P1">${body}</part></score-partwise>`;
 }
 
-async function drawMidiScore() {
+async function drawMidiScore(justLoaded = false) {
   const token = ++scoreToken;
   scoreSteps = null;
   const notes = activeNotes();
@@ -724,6 +743,7 @@ async function drawMidiScore() {
     scoreSteps = steps;
     $('scoreNote').textContent = 'generated from the MIDI file, so the notation is approximate';
     highlightScore();
+    if (justLoaded) showPracticeArea();
     if (player.playing || learn.active) scoreTo(learn.phase === 'play' ? learn.steps[learn.step]?.start ?? 0 : player.t);
   } catch (e) {
     if (token !== scoreToken) return;
@@ -761,6 +781,37 @@ function highlightScore() {
   if (r.top < b.top || r.bottom > b.bottom) box.scrollTop += r.top - b.top - 16;
 }
 
+// Score zoom, remembered in this browser
+let scoreZoom = 1;
+try { scoreZoom = +localStorage.getItem('scoreZoom') || 1; } catch { /* storage unavailable */ }
+function setZoom(z) {
+  scoreZoom = Math.min(2, Math.max(0.5, Math.round(z * 10) / 10));
+  $('zoomLbl').textContent = Math.round(scoreZoom * 100) + '%';
+  $('zoomOut').disabled = scoreZoom <= 0.5;
+  $('zoomIn').disabled = scoreZoom >= 2;
+  try { localStorage.setItem('scoreZoom', scoreZoom); } catch { /* storage unavailable */ }
+  if (osmd) { osmd.zoom = scoreZoom; rerenderScore(); }
+}
+$('zoomOut').onclick = () => setZoom(scoreZoom - 0.1);
+$('zoomIn').onclick = () => setZoom(scoreZoom + 0.1);
+setZoom(scoreZoom);
+
+// Gives the score whatever height is left after the Play/Learn controls and the keyboard,
+// so the three fit on one screen (e.g. an iPad in landscape)
+function fitScore() {
+  if ($('scoreSection').hidden) return;
+  const box = $('scoreBox');
+  const rest = $('controlsSection').offsetHeight + $('keysSection').offsetHeight +
+    ($('scoreSection').offsetHeight - box.offsetHeight) + 2 * 14 /* gaps */ + 8;
+  box.style.height = Math.max(160, window.innerHeight - rest) + 'px';
+}
+// Scrolls so the controls, score and keyboard are all in view, if they aren't already
+function showPracticeArea() {
+  if ($('scoreSection').hidden) return;
+  const top = $('controlsSection').getBoundingClientRect().top, bottom = $('keysSection').getBoundingClientRect().bottom;
+  if (top < 0 || bottom > window.innerHeight) $('controlsSection').scrollIntoView({ block: 'start' });
+}
+
 // Redraws the score for the new width and puts the cursor back where it was
 function rerenderScore() {
   if (!osmd || !scoreSteps || $('scoreSection').hidden) return;
@@ -778,6 +829,11 @@ function rerenderScore() {
 let song = null;
 const enabledParts = new Set();
 const activeNotes = () => song ? song.notes.filter(n => enabledParts.has(n.part)) : [];
+
+// iPadOS/iOS only enable the file types they recognize, and they don't know .mxl, so there
+// the picker is left unfiltered (the file type is detected from its contents anyway)
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (isIOS) $('file').removeAttribute('accept');
 
 $('file').onchange = e => {
   if (e.target.files[0]) loadFile(e.target.files[0]);
@@ -832,7 +888,8 @@ async function loadFile(f) {
     };
     $('parts').appendChild(el);
   }
-  if (song.kind === 'midi') drawMidiScore();
+  if (song.kind === 'midi') drawMidiScore(true);
+  else showPracticeArea();
   $('songInfo').textContent = `${f.name} · ${fmtTime(song.songEnd)} · ${song.bpm} BPM · ${song.timeSig} · ${song.bars.length - 1} bars`;
   $('pos').max = song.songEnd;
   $('pos').value = 0;
@@ -1007,6 +1064,7 @@ function stopAll() {
 document.querySelectorAll('.tab').forEach(tab => tab.onclick = () => {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
   document.querySelectorAll('.pane').forEach(p => { p.hidden = p.id !== tab.dataset.pane; });
+  fitScore(); // the Learn pane is taller than the Play one
 });
 
 // ---------- Learn mode ----------
